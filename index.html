@@ -62,6 +62,7 @@
             const [showNotification, setShowNotification] = useState(null);
             const [selectedEmpId, setSelectedEmpId] = useState(null);
             const [isLoading, setIsLoading] = useState(true);
+            const [errorMsg, setErrorMsg] = useState("");
 
             const notify = (msg) => {
                 setShowNotification(msg);
@@ -73,7 +74,11 @@
                     if (u) {
                         setUser(u);
                     } else {
-                        auth.signInAnonymously();
+                        auth.signInAnonymously().catch(e => {
+                            console.error("Auth Error", e);
+                            setErrorMsg("認證失敗，請檢查 Firebase Auth 設定");
+                            setIsLoading(false);
+                        });
                     }
                 });
                 return () => unsubscribe();
@@ -88,14 +93,21 @@
                         setEmployees(empList);
                         setIsLoading(false);
                         setTimeout(() => lucide.createIcons(), 100);
-                    }, (err) => console.error("Snapshot error:", err));
+                    }, (err) => {
+                        console.error("Snapshot error:", err);
+                        setErrorMsg("資料庫讀取拒絕：請檢查 Firestore 規則 (Rules)");
+                        setIsLoading(false);
+                    });
 
                 const unsubRec = db.collection('artifacts').doc(appId).collection('public').doc('data').collection('records')
                     .onSnapshot((snapshot) => {
                         const recList = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
                         setRecords(recList.sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp)));
                         setTimeout(() => lucide.createIcons(), 100);
-                    }, (err) => console.error("Snapshot error:", err));
+                    }, (err) => {
+                        console.error("Snapshot error:", err);
+                        setIsLoading(false);
+                    });
 
                 return () => { unsubEmp(); unsubRec(); };
             }, [user]);
@@ -118,7 +130,10 @@
                     await db.collection('artifacts').doc(appId).collection('public').doc('data').collection('records').add(newRecord);
                     setForm({ ...form, content: '', empId: '' });
                     notify('紀錄已同步至雲端');
-                } catch (err) { notify('儲存失敗，請檢查 Firestore 規則'); }
+                } catch (err) { 
+                    notify('儲存失敗，請檢查 Firestore 規則'); 
+                    console.error(err);
+                }
             };
 
             const [bulkInput, setBulkInput] = useState('');
@@ -166,116 +181,163 @@
                 };
             }, [records, employees]);
 
-            if (isLoading) return <div className="min-h-screen flex items-center justify-center font-bold text-slate-400">系統載入中...</div>;
+            if (isLoading) return (
+                <div className="min-h-screen flex flex-col items-center justify-center bg-slate-50">
+                    <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-blue-600 mb-4"></div>
+                    <div className="font-bold text-slate-400">系統載入中...</div>
+                </div>
+            );
 
             return (
                 <div className="min-h-screen p-4 md:p-8 max-w-6xl mx-auto">
+                    {/* 錯誤提示 */}
+                    {errorMsg && (
+                        <div className="mb-6 p-4 bg-red-100 border-l-4 border-red-500 text-red-700 flex justify-between items-center">
+                            <span><strong>連線錯誤：</strong>{errorMsg}</span>
+                            <button onClick={() => window.location.reload()} className="underline font-bold">重新整理</button>
+                        </div>
+                    )}
+
                     {showNotification && (
                         <div className="fixed top-4 left-1/2 -translate-x-1/2 bg-blue-600 text-white px-6 py-3 rounded-full shadow-lg z-50">
                             {showNotification}
                         </div>
                     )}
 
-                    <nav className="flex justify-between items-center mb-8 bg-white p-4 rounded-2xl shadow-sm">
+                    <nav className="flex justify-between items-center mb-8 bg-white p-4 rounded-2xl shadow-sm border border-slate-100">
                         <div className="flex items-center gap-2">
                             <div className="bg-blue-600 p-2 rounded-lg text-white"><i data-lucide="trending-up"></i></div>
                             <h1 className="text-xl font-bold">年度考核依據系統</h1>
                         </div>
                         <div className="flex bg-slate-100 p-1 rounded-xl">
-                            <button onClick={() => {setView('frontend'); setSelectedEmpId(null)}} className={`px-4 py-2 rounded-lg text-sm font-medium ${view === 'frontend' ? 'bg-white text-blue-600 shadow-sm' : 'text-slate-500'}`}>前台記錄</button>
-                            <button onClick={() => setView('admin')} className={`px-4 py-2 rounded-lg text-sm font-medium ${view === 'admin' ? 'bg-white text-blue-600 shadow-sm' : 'text-slate-500'}`}>後台管理</button>
+                            <button onClick={() => {setView('frontend'); setSelectedEmpId(null)}} className={`px-4 py-2 rounded-lg text-sm font-medium transition-all ${view === 'frontend' ? 'bg-white text-blue-600 shadow-sm' : 'text-slate-500'}`}>前台記錄</button>
+                            <button onClick={() => setView('admin')} className={`px-4 py-2 rounded-lg text-sm font-medium transition-all ${view === 'admin' ? 'bg-white text-blue-600 shadow-sm' : 'text-slate-500'}`}>後台管理</button>
                         </div>
                     </nav>
 
                     {view === 'frontend' ? (
                         <div className="grid md:grid-cols-3 gap-8">
-                            <div className="bg-white p-6 rounded-2xl shadow-sm">
+                            <div className="bg-white p-6 rounded-2xl shadow-sm border border-slate-100">
                                 <h2 className="text-lg font-bold mb-6 flex items-center gap-2"><i data-lucide="plus-circle" className="text-blue-500"></i>記錄表現</h2>
                                 <form onSubmit={handleSubmitRecord} className="space-y-4">
-                                    <select className="w-full border p-3 rounded-xl bg-slate-50 outline-none" value={form.dept} onChange={e => setForm({...form, dept: e.target.value, empId: ''})}>
+                                    <select className="w-full border p-3 rounded-xl bg-slate-50 outline-none focus:ring-2 focus:ring-blue-500" value={form.dept} onChange={e => setForm({...form, dept: e.target.value, empId: ''})}>
                                         <option value="">-- 選擇部門 --</option>
                                         {departments.map(d => <option key={d} value={d}>{d}</option>)}
                                     </select>
-                                    <select className="w-full border p-3 rounded-xl bg-slate-50 outline-none" value={form.empId} onChange={e => setForm({...form, empId: e.target.value})} disabled={!form.dept}>
+                                    <select className="w-full border p-3 rounded-xl bg-slate-50 outline-none focus:ring-2 focus:ring-blue-500" value={form.empId} onChange={e => setForm({...form, empId: e.target.value})} disabled={!form.dept}>
                                         <option value="">-- 選擇同仁 --</option>
                                         {employees.filter(e => e.dept === form.dept && e.status === 'active').map(e => <option key={e.id} value={e.id}>{e.name}</option>)}
                                     </select>
                                     <div className="flex gap-2">
-                                        <button type="button" onClick={() => setForm({...form, type:'good'})} className={`flex-1 py-3 rounded-xl border ${form.type === 'good' ? 'bg-green-50 border-green-200 text-green-700' : 'bg-white text-slate-400'}`}>優良</button>
-                                        <button type="button" onClick={() => setForm({...form, type:'bad'})} className={`flex-1 py-3 rounded-xl border ${form.type === 'bad' ? 'bg-red-50 border-red-200 text-red-700' : 'bg-white text-slate-400'}`}>欠佳</button>
+                                        <button type="button" onClick={() => setForm({...form, type:'good'})} className={`flex-1 py-3 rounded-xl border transition-all ${form.type === 'good' ? 'bg-green-50 border-green-200 text-green-700 font-bold' : 'bg-white text-slate-400'}`}>優良</button>
+                                        <button type="button" onClick={() => setForm({...form, type:'bad'})} className={`flex-1 py-3 rounded-xl border transition-all ${form.type === 'bad' ? 'bg-red-50 border-red-200 text-red-700 font-bold' : 'bg-white text-slate-400'}`}>欠佳</button>
                                     </div>
-                                    <select className="w-full border p-3 rounded-xl bg-slate-50" value={form.category} onChange={e => setForm({...form, category: e.target.value})}>
+                                    <select className="w-full border p-3 rounded-xl bg-slate-50 outline-none focus:ring-2 focus:ring-blue-500" value={form.category} onChange={e => setForm({...form, category: e.target.value})}>
                                         {categories.map(c => <option key={c} value={c}>{c}</option>)}
                                     </select>
-                                    <textarea className="w-full border p-3 rounded-xl bg-slate-50 min-h-[120px]" placeholder="描述表現細節..." value={form.content} onChange={e => setForm({...form, content: e.target.value})} />
-                                    <button className="w-full bg-blue-600 text-white font-bold py-4 rounded-xl shadow-md">提交紀錄</button>
+                                    <textarea className="w-full border p-3 rounded-xl bg-slate-50 min-h-[120px] outline-none focus:ring-2 focus:ring-blue-500" placeholder="描述表現細節..." value={form.content} onChange={e => setForm({...form, content: e.target.value})} />
+                                    <button className="w-full bg-blue-600 hover:bg-blue-700 text-white font-bold py-4 rounded-xl shadow-md transition-all active:scale-[0.98]">提交紀錄</button>
                                 </form>
                             </div>
                             <div className="md:col-span-2 space-y-4">
-                                <h2 className="text-lg font-bold">即時動態</h2>
-                                {records.length === 0 ? <p className="text-slate-400">目前尚無雲端紀錄</p> : records.map(r => (
-                                    <div key={r.id} className="bg-white p-5 rounded-2xl shadow-sm border border-slate-100 flex gap-4">
+                                <h2 className="text-lg font-bold flex items-center gap-2"><i data-lucide="search" className="text-slate-400"></i>即時動態</h2>
+                                {records.length === 0 ? <p className="text-slate-400 py-10 text-center bg-white rounded-2xl border border-dashed">目前尚無雲端紀錄</p> : records.map(r => (
+                                    <div key={r.id} className="bg-white p-5 rounded-2xl shadow-sm border border-slate-100 flex gap-4 animate-in fade-in">
                                         <div className={`p-2 rounded-full h-fit ${r.type === 'good' ? 'bg-green-100 text-green-600' : 'bg-red-100 text-red-600'}`}>
                                             <i data-lucide={r.type === 'good' ? "trending-up" : "trending-down"}></i>
                                         </div>
                                         <div className="flex-1">
-                                            <div className="flex justify-between font-bold"><span>{r.empName} <small className="text-slate-400">[{r.dept}]</small></span><small className="font-normal text-slate-400">{new Date(r.timestamp).toLocaleString()}</small></div>
-                                            <div className="text-xs bg-slate-100 inline-block px-2 py-1 rounded my-1 text-slate-500">{r.category}</div>
-                                            <p className="text-slate-600">{r.content}</p>
+                                            <div className="flex justify-between font-bold text-slate-800">
+                                                <span>{r.empName} <small className="text-slate-400 ml-1 font-normal">[{r.dept}]</small></span>
+                                                <small className="font-normal text-slate-400">{new Date(r.timestamp).toLocaleString()}</small>
+                                            </div>
+                                            <div className="text-xs bg-slate-100 inline-block px-2 py-1 rounded my-1 text-slate-500 font-medium">{r.category}</div>
+                                            <p className="text-slate-600 leading-relaxed">{r.content}</p>
                                         </div>
                                     </div>
                                 ))}
                             </div>
                         </div>
                     ) : selectedEmpId ? (
-                        <div className="bg-white p-8 rounded-3xl shadow-sm animate-in fade-in">
-                            <button onClick={() => setSelectedEmpId(null)} className="mb-4 text-blue-600 font-bold flex items-center gap-1"><i data-lucide="arrow-left" size="16"></i>返回列表</button>
-                            <h2 className="text-3xl font-black mb-6">{employees.find(e => e.id === selectedEmpId)?.name} 的詳細紀錄</h2>
+                        <div className="bg-white p-8 rounded-3xl shadow-sm border border-slate-100 animate-in fade-in slide-in-from-bottom-4">
+                            <button onClick={() => setSelectedEmpId(null)} className="mb-6 text-slate-500 hover:text-blue-600 font-bold flex items-center gap-2 transition-colors"><i data-lucide="arrow-left" size="20"></i>返回後台總覽</button>
+                            <div className="flex justify-between items-end border-b pb-6 mb-6">
+                                <div>
+                                    <h2 className="text-3xl font-black text-slate-800 mb-1">{employees.find(e => e.id === selectedEmpId)?.name}</h2>
+                                    <p className="text-slate-400">{employees.find(e => e.id === selectedEmpId)?.dept}</p>
+                                </div>
+                                <div className="flex gap-4">
+                                    <div className="text-center px-4 py-2 bg-green-50 rounded-xl"><p className="text-[10px] text-green-600 font-bold">優良</p><p className="text-xl font-bold text-green-700">{records.filter(r => r.empId === selectedEmpId && r.type === 'good').length}</p></div>
+                                    <div className="text-center px-4 py-2 bg-red-50 rounded-xl"><p className="text-[10px] text-red-600 font-bold">欠佳</p><p className="text-xl font-bold text-red-700">{records.filter(r => r.empId === selectedEmpId && r.type === 'bad').length}</p></div>
+                                </div>
+                            </div>
                             <div className="space-y-4">
                                 {records.filter(r => r.empId === selectedEmpId).map(r => (
-                                    <div key={r.id} className="p-4 bg-slate-50 rounded-xl flex justify-between">
-                                        <div>
-                                            <p className="font-bold">{r.category} <small className="font-normal text-slate-400">{new Date(r.timestamp).toLocaleString()}</small></p>
-                                            <p>{r.content}</p>
+                                    <div key={r.id} className="p-5 bg-slate-50 border border-slate-100 rounded-2xl flex justify-between group hover:bg-white hover:shadow-md transition-all">
+                                        <div className="flex gap-4">
+                                            <div className={`p-2 rounded-xl h-fit ${r.type === 'good' ? 'bg-green-100 text-green-600' : 'bg-red-100 text-red-600'}`}>
+                                                <i data-lucide={r.type === 'good' ? "trending-up" : "trending-down"} size="18"></i>
+                                            </div>
+                                            <div>
+                                                <p className="font-bold text-slate-700">{r.category} <span className="font-normal text-slate-400 ml-2 text-xs">{new Date(r.timestamp).toLocaleString()}</span></p>
+                                                <p className="text-slate-600 mt-1">{r.content}</p>
+                                            </div>
                                         </div>
-                                        <button onClick={() => deleteRecord(r.id)} className="text-red-400"><i data-lucide="trash-2" size="18"></i></button>
+                                        <button onClick={() => deleteRecord(r.id)} className="opacity-0 group-hover:opacity-100 text-slate-300 hover:text-red-500 transition-all p-2"><i data-lucide="trash-2" size="20"></i></button>
                                     </div>
                                 ))}
+                                {records.filter(r => r.empId === selectedEmpId).length === 0 && <p className="text-center py-10 text-slate-400">目前尚無此同仁的紀錄</p>}
                             </div>
                         </div>
                     ) : (
-                        <div className="space-y-8">
+                        <div className="space-y-8 animate-in fade-in">
                             <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-                                <div className="bg-white p-6 rounded-2xl shadow-sm border-l-4 border-blue-500"><p className="text-slate-500 text-sm">員工總數</p><p className="text-2xl font-black">{employees.length}</p></div>
-                                <div className="bg-white p-6 rounded-2xl shadow-sm border-l-4 border-green-500"><p className="text-slate-500 text-sm">優良總計</p><p className="text-2xl font-black text-green-600">{stats.totalGood}</p></div>
-                                <div className="bg-white p-6 rounded-2xl shadow-sm border-l-4 border-red-500"><p className="text-slate-500 text-sm">欠佳總計</p><p className="text-2xl font-black text-red-600">{stats.totalBad}</p></div>
-                                <div className="bg-white p-6 rounded-2xl shadow-sm border-l-4 border-amber-500"><p className="text-slate-500 text-sm">雲端紀錄</p><p className="text-2xl font-black">{records.length}</p></div>
+                                <div className="bg-white p-6 rounded-2xl shadow-sm border-l-4 border-blue-500 border border-slate-100"><p className="text-slate-500 text-xs font-bold uppercase tracking-wider mb-1">員工總數</p><p className="text-2xl font-black">{employees.length}</p></div>
+                                <div className="bg-white p-6 rounded-2xl shadow-sm border-l-4 border-green-500 border border-slate-100"><p className="text-slate-500 text-xs font-bold uppercase tracking-wider mb-1">優良總計</p><p className="text-2xl font-black text-green-600">{stats.totalGood}</p></div>
+                                <div className="bg-white p-6 rounded-2xl shadow-sm border-l-4 border-red-500 border border-slate-100"><p className="text-slate-500 text-xs font-bold uppercase tracking-wider mb-1">欠佳總計</p><p className="text-2xl font-black text-red-700">{stats.totalBad}</p></div>
+                                <div className="bg-white p-6 rounded-2xl shadow-sm border-l-4 border-amber-500 border border-slate-100"><p className="text-slate-500 text-xs font-bold uppercase tracking-wider mb-1">雲端總筆數</p><p className="text-2xl font-black">{records.length}</p></div>
                             </div>
                             <div className="grid md:grid-cols-2 gap-8">
-                                <div className="bg-white p-6 rounded-2xl shadow-sm">
-                                    <h3 className="font-bold mb-4 text-green-700">優異前十</h3>
-                                    {stats.top10.map(s => <div key={s.id} onClick={() => setSelectedEmpId(s.id)} className="flex justify-between p-2 hover:bg-slate-50 rounded cursor-pointer"><span>{s.name}</span><span className="text-green-600">+{s.good}</span></div>)}
+                                <div className="bg-white p-6 rounded-2xl shadow-sm border border-slate-100">
+                                    <h3 className="font-bold mb-4 text-green-700 flex items-center gap-2"><i data-lucide="trending-up" size="18"></i> 表現優異前十</h3>
+                                    <div className="space-y-1">
+                                        {stats.top10.map((s, i) => (
+                                            <div key={s.id} onClick={() => setSelectedEmpId(s.id)} className="flex justify-between items-center p-3 hover:bg-green-50 rounded-xl cursor-pointer transition-colors group">
+                                                <span className="text-slate-700 font-medium"><span className="text-slate-300 mr-2">#{i+1}</span>{s.name} <small className="text-slate-400">({s.dept})</small></span>
+                                                <span className="text-green-600 font-bold bg-green-100 px-2 py-0.5 rounded-lg text-sm">+{s.good}</span>
+                                            </div>
+                                        ))}
+                                    </div>
                                 </div>
-                                <div className="bg-white p-6 rounded-2xl shadow-sm">
-                                    <h3 className="font-bold mb-4 text-red-700">需加強前十</h3>
-                                    {stats.bottom10.map(s => <div key={s.id} onClick={() => setSelectedEmpId(s.id)} className="flex justify-between p-2 hover:bg-slate-50 rounded cursor-pointer"><span>{s.name}</span><span className="text-red-600">-{s.bad}</span></div>)}
+                                <div className="bg-white p-6 rounded-2xl shadow-sm border border-slate-100">
+                                    <h3 className="font-bold mb-4 text-red-700 flex items-center gap-2"><i data-lucide="trending-down" size="18"></i> 需加強前十</h3>
+                                    <div className="space-y-1">
+                                        {stats.bottom10.map((s, i) => (
+                                            <div key={s.id} onClick={() => setSelectedEmpId(s.id)} className="flex justify-between items-center p-3 hover:bg-red-50 rounded-xl cursor-pointer transition-colors group">
+                                                <span className="text-slate-700 font-medium"><span className="text-slate-300 mr-2">#{i+1}</span>{s.name} <small className="text-slate-400">({s.dept})</small></span>
+                                                <span className="text-red-600 font-bold bg-red-100 px-2 py-0.5 rounded-lg text-sm">-{s.bad}</span>
+                                            </div>
+                                        ))}
+                                    </div>
                                 </div>
                             </div>
-                            <div className="bg-white p-8 rounded-2xl shadow-sm border">
-                                <h3 className="text-xl font-bold mb-6">員工管理</h3>
+                            <div className="bg-white p-8 rounded-2xl shadow-sm border border-slate-100">
+                                <h3 className="text-xl font-bold mb-6 flex items-center gap-2"><i data-lucide="users" className="text-blue-500"></i> 員工資料維護與管理</h3>
                                 <div className="grid md:grid-cols-2 gap-8">
                                     <div>
-                                        <p className="text-sm font-bold text-slate-500 mb-2">批量匯入 (姓名 部門)</p>
-                                        <textarea className="w-full border p-4 bg-slate-50 rounded-xl h-32" value={bulkInput} onChange={e => setBulkInput(e.target.value)} placeholder="例：王小明 出貨部" />
-                                        <button onClick={handleBulkAdd} className="mt-2 bg-slate-800 text-white px-6 py-2 rounded-xl">匯入雲端</button>
+                                        <p className="text-sm font-bold text-slate-500 mb-2">快速批量匯入 (格式：姓名 部門)</p>
+                                        <textarea className="w-full border p-4 bg-slate-50 rounded-xl h-32 outline-none focus:ring-2 focus:ring-slate-800" value={bulkInput} onChange={e => setBulkInput(e.target.value)} placeholder="例：王小明 出貨部&#10;李大同 研發部" />
+                                        <button onClick={handleBulkAdd} className="mt-4 bg-slate-800 hover:bg-black text-white px-8 py-3 rounded-xl font-bold transition-all shadow-md active:scale-95">匯入到雲端資料庫</button>
                                     </div>
-                                    <div className="max-h-64 overflow-y-auto custom-scrollbar">
+                                    <div className="max-h-80 overflow-y-auto custom-scrollbar space-y-2 pr-2">
                                         {employees.map(e => (
-                                            <div key={e.id} className="flex justify-between p-3 border-b">
-                                                <span>{e.name} <small className="text-slate-400">{e.dept}</small></span>
+                                            <div key={e.id} className="flex justify-between items-center p-3 bg-slate-50 rounded-xl border border-slate-100">
+                                                <span><span className={`font-bold ${e.status === 'inactive' ? 'line-through text-slate-400' : 'text-slate-700'}`}>{e.name}</span> <small className="text-slate-400">[{e.dept}]</small></span>
                                                 <div className="flex gap-2">
-                                                    <button onClick={() => setSelectedEmpId(e.id)} className="text-blue-500"><i data-lucide="file-text" size="16"></i></button>
-                                                    <button onClick={() => toggleStatus(e.id, e.status)} className="text-xs font-bold">{e.status === 'active' ? '離職' : '恢復'}</button>
+                                                    <button onClick={() => setSelectedEmpId(e.id)} className="p-2 bg-blue-50 text-blue-600 rounded-lg hover:bg-blue-100 transition-colors" title="查看紀錄"><i data-lucide="file-text" size="16"></i></button>
+                                                    <button onClick={() => toggleStatus(e.id, e.status)} className={`px-3 py-1 rounded-lg text-xs font-bold transition-all ${e.status === 'active' ? 'bg-slate-200 text-slate-500 hover:bg-red-50 hover:text-red-500' : 'bg-green-50 text-green-600 hover:bg-green-100'}`}>
+                                                        {e.status === 'active' ? '標記離職' : '恢復'}
+                                                    </button>
                                                 </div>
                                             </div>
                                         ))}
