@@ -1,0 +1,310 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>年度考核依據系統</title>
+    <!-- 載入 React 與 Babel (用於瀏覽器端解析 JSX) -->
+    <script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+    <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+    <!-- 載入 Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- 載入 Lucide Icons -->
+    <script src="https://unpkg.com/lucide@latest"></script>
+    <!-- 載入 Firebase SDK -->
+    <script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-app-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-auth-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-firestore-compat.js"></script>
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Noto+Sans+TC:wght@400;500;700;900&display=swap');
+        body { font-family: 'Noto Sans TC', sans-serif; }
+        .custom-scrollbar::-webkit-scrollbar { width: 6px; }
+        .custom-scrollbar::-webkit-scrollbar-track { background: #f1f5f9; border-radius: 10px; }
+        .custom-scrollbar::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius: 10px; }
+        .custom-scrollbar::-webkit-scrollbar-thumb:hover { background: #94a3b8; }
+    </style>
+</head>
+<body class="bg-slate-50">
+    <div id="root"></div>
+
+    <script type="text/babel">
+        const { useState, useMemo, useEffect } = React;
+
+        // --- 請在此處填入您的 Firebase 配置 ---
+        // 您可以從 Firebase Console > 專案設定 > 您的應用程式 中取得
+        const firebaseConfig = {
+            apiKey: "", 
+            authDomain: "",
+            projectId: "",
+            storageBucket: "",
+            messagingSenderId: "",
+            appId: ""
+        };
+
+        // 初始化 Firebase (Compat 版本)
+        if (!firebase.apps.length) {
+            firebase.initializeApp(firebaseConfig);
+        }
+        const auth = firebase.auth();
+        const db = firebase.firestore();
+        const appId = "performance-tracking-prod";
+
+        // 圖示組件封裝
+        const Icon = ({ name, size = 24, className = "" }) => {
+            const [iconHtml, setIconHtml] = useState("");
+            useEffect(() => {
+                if (window.lucide) {
+                    const icon = window.lucide.icons[name];
+                    if (icon) {
+                        // 簡單模擬 lucide-react 的行為
+                    }
+                }
+            }, [name]);
+            // 直接使用 SVG 或是透過 Lucide 渲染
+            return <i data-lucide={name} className={className} style={{width: size, height: size}}></i>;
+        };
+
+        // 部門清單
+        const departments = ["出貨部", "物流部", "管理部", "商務拓展部", "客服部", "銷售部", "行銷部", "包裝部", "生產部", "研發部"];
+        const categories = ["工作品質與專業度", "效率與交付速度", "團隊協作與溝通", "責任感與主動性", "創新與問題解決", "學習與成長"];
+
+        function App() {
+            const [user, setUser] = useState(null);
+            const [view, setView] = useState('frontend'); 
+            const [employees, setEmployees] = useState([]);
+            const [records, setRecords] = useState([]);
+            const [showNotification, setShowNotification] = useState(null);
+            const [selectedEmpId, setSelectedEmpId] = useState(null);
+            const [isLoading, setIsLoading] = useState(true);
+
+            const notify = (msg) => {
+                setShowNotification(msg);
+                setTimeout(() => setShowNotification(null), 3000);
+            };
+
+            useEffect(() => {
+                const unsubscribe = auth.onAuthStateChanged((u) => {
+                    if (u) {
+                        setUser(u);
+                    } else {
+                        auth.signInAnonymously();
+                    }
+                });
+                return () => unsubscribe();
+            }, []);
+
+            useEffect(() => {
+                if (!user) return;
+
+                const unsubEmp = db.collection('artifacts').doc(appId).collection('public').doc('data').collection('employees')
+                    .onSnapshot((snapshot) => {
+                        const empList = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+                        setEmployees(empList);
+                        setIsLoading(false);
+                        setTimeout(() => lucide.createIcons(), 100);
+                    });
+
+                const unsubRec = db.collection('artifacts').doc(appId).collection('public').doc('data').collection('records')
+                    .onSnapshot((snapshot) => {
+                        const recList = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+                        setRecords(recList.sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp)));
+                        setTimeout(() => lucide.createIcons(), 100);
+                    });
+
+                return () => { unsubEmp(); unsubRec(); };
+            }, [user]);
+
+            useEffect(() => {
+                if (!isLoading) lucide.createIcons();
+            }, [view, selectedEmpId, isLoading]);
+
+            const [form, setForm] = useState({ dept: '', empId: '', type: 'good', category: categories[0], content: '' });
+
+            const handleSubmitRecord = async (e) => {
+                e.preventDefault();
+                if (!form.dept || !form.empId || !form.content) {
+                    notify('請填寫完整資訊');
+                    return;
+                }
+                const targetEmp = employees.find(emp => emp.id === form.empId);
+                const newRecord = { ...form, empName: targetEmp?.name, timestamp: new Date().toISOString(), createdBy: user.uid };
+                try {
+                    await db.collection('artifacts').doc(appId).collection('public').doc('data').collection('records').add(newRecord);
+                    setForm({ ...form, content: '', empId: '' });
+                    notify('紀錄已同步至雲端');
+                } catch (err) { notify('儲存失敗'); }
+            };
+
+            const [bulkInput, setBulkInput] = useState('');
+            const handleBulkAdd = async () => {
+                const lines = bulkInput.split('\n').filter(line => line.trim());
+                try {
+                    for (const line of lines) {
+                        const parts = line.split(/[ ,，\t]+/);
+                        await db.collection('artifacts').doc(appId).collection('public').doc('data').collection('employees').add({
+                            name: parts[0], dept: parts[1] || '管理部', status: 'active', createdAt: new Date().toISOString()
+                        });
+                    }
+                    setBulkInput('');
+                    notify(`成功匯入 ${lines.length} 位員工`);
+                } catch (err) { notify('匯入失敗'); }
+            };
+
+            const toggleStatus = async (id, currentStatus) => {
+                await db.collection('artifacts').doc(appId).collection('public').doc('data').collection('employees').doc(id).update({
+                    status: currentStatus === 'active' ? 'inactive' : 'active'
+                });
+            };
+
+            const deleteRecord = async (recordId) => {
+                await db.collection('artifacts').doc(appId).collection('public').doc('data').collection('records').doc(recordId).delete();
+                notify('紀錄已刪除');
+            };
+
+            const stats = useMemo(() => {
+                const counts = {};
+                employees.forEach(e => counts[e.id] = { id: e.id, name: e.name, dept: e.dept, good: 0, bad: 0, score: 0 });
+                records.forEach(r => {
+                    if (counts[r.empId]) {
+                        if (r.type === 'good') { counts[r.empId].good += 1; counts[r.empId].score += 1; }
+                        else { counts[r.empId].bad += 1; counts[r.empId].score -= 1; }
+                    }
+                });
+                const sorted = Object.values(counts).sort((a, b) => b.score - a.score);
+                return {
+                    top10: sorted.filter(s => s.good > 0 || s.bad > 0).slice(0, 10),
+                    bottom10: [...sorted].reverse().filter(s => s.good > 0 || s.bad > 0).slice(0, 10),
+                    totalGood: records.filter(r => r.type === 'good').length,
+                    totalBad: records.filter(r => r.type === 'bad').length,
+                    allStats: counts
+                };
+            }, [records, employees]);
+
+            if (isLoading) return <div className="min-h-screen flex items-center justify-center font-bold text-slate-400">系統載入中...</div>;
+
+            return (
+                <div className="min-h-screen p-4 md:p-8 max-w-6xl mx-auto">
+                    {showNotification && (
+                        <div className="fixed top-4 left-1/2 -translate-x-1/2 bg-blue-600 text-white px-6 py-3 rounded-full shadow-lg z-50">
+                            {showNotification}
+                        </div>
+                    )}
+
+                    <nav className="flex justify-between items-center mb-8 bg-white p-4 rounded-2xl shadow-sm">
+                        <div className="flex items-center gap-2">
+                            <div className="bg-blue-600 p-2 rounded-lg text-white"><i data-lucide="trending-up"></i></div>
+                            <h1 className="text-xl font-bold">年度考核依據系統</h1>
+                        </div>
+                        <div className="flex bg-slate-100 p-1 rounded-xl">
+                            <button onClick={() => {setView('frontend'); setSelectedEmpId(null)}} className={`px-4 py-2 rounded-lg text-sm font-medium ${view === 'frontend' ? 'bg-white text-blue-600 shadow-sm' : 'text-slate-500'}`}>前台記錄</button>
+                            <button onClick={() => setView('admin')} className={`px-4 py-2 rounded-lg text-sm font-medium ${view === 'admin' ? 'bg-white text-blue-600 shadow-sm' : 'text-slate-500'}`}>後台管理</button>
+                        </div>
+                    </nav>
+
+                    {view === 'frontend' ? (
+                        <div className="grid md:grid-cols-3 gap-8">
+                            <div className="bg-white p-6 rounded-2xl shadow-sm">
+                                <h2 className="text-lg font-bold mb-6 flex items-center gap-2"><i data-lucide="plus-circle" className="text-blue-500"></i>記錄表現</h2>
+                                <form onSubmit={handleSubmitRecord} className="space-y-4">
+                                    <select className="w-full border p-3 rounded-xl bg-slate-50 outline-none" value={form.dept} onChange={e => setForm({...form, dept: e.target.value, empId: ''})}>
+                                        <option value="">-- 選擇部門 --</option>
+                                        {departments.map(d => <option key={d} value={d}>{d}</option>)}
+                                    </select>
+                                    <select className="w-full border p-3 rounded-xl bg-slate-50 outline-none" value={form.empId} onChange={e => setForm({...form, empId: e.target.value})} disabled={!form.dept}>
+                                        <option value="">-- 選擇同仁 --</option>
+                                        {employees.filter(e => e.dept === form.dept && e.status === 'active').map(e => <option key={e.id} value={e.id}>{e.name}</option>)}
+                                    </select>
+                                    <div className="flex gap-2">
+                                        <button type="button" onClick={() => setForm({...form, type:'good'})} className={`flex-1 py-3 rounded-xl border ${form.type === 'good' ? 'bg-green-50 border-green-200 text-green-700' : 'bg-white text-slate-400'}`}>優良</button>
+                                        <button type="button" onClick={() => setForm({...form, type:'bad'})} className={`flex-1 py-3 rounded-xl border ${form.type === 'bad' ? 'bg-red-50 border-red-200 text-red-700' : 'bg-white text-slate-400'}`}>欠佳</button>
+                                    </div>
+                                    <select className="w-full border p-3 rounded-xl bg-slate-50" value={form.category} onChange={e => setForm({...form, category: e.target.value})}>
+                                        {categories.map(c => <option key={c} value={c}>{c}</option>)}
+                                    </select>
+                                    <textarea className="w-full border p-3 rounded-xl bg-slate-50 min-h-[120px]" placeholder="描述表現細節..." value={form.content} onChange={e => setForm({...form, content: e.target.value})} />
+                                    <button className="w-full bg-blue-600 text-white font-bold py-4 rounded-xl shadow-md">提交紀錄</button>
+                                </form>
+                            </div>
+                            <div className="md:col-span-2 space-y-4">
+                                <h2 className="text-lg font-bold">即時動態</h2>
+                                {records.map(r => (
+                                    <div key={r.id} className="bg-white p-5 rounded-2xl shadow-sm border border-slate-100 flex gap-4">
+                                        <div className={`p-2 rounded-full h-fit ${r.type === 'good' ? 'bg-green-100 text-green-600' : 'bg-red-100 text-red-600'}`}>
+                                            <i data-lucide={r.type === 'good' ? "trending-up" : "trending-down"}></i>
+                                        </div>
+                                        <div className="flex-1">
+                                            <div className="flex justify-between font-bold"><span>{r.empName} <small className="text-slate-400">[{r.dept}]</small></span><small className="font-normal text-slate-400">{new Date(r.timestamp).toLocaleTimeString()}</small></div>
+                                            <div className="text-xs bg-slate-100 inline-block px-2 py-1 rounded my-1 text-slate-500">{r.category}</div>
+                                            <p className="text-slate-600">{r.content}</p>
+                                        </div>
+                                    </div>
+                                ))}
+                            </div>
+                        </div>
+                    ) : selectedEmpId ? (
+                        <div className="bg-white p-8 rounded-3xl shadow-sm animate-in fade-in">
+                            <button onClick={() => setSelectedEmpId(null)} className="mb-4 text-blue-600 font-bold flex items-center gap-1"><i data-lucide="arrow-left" size="16"></i>返回列表</button>
+                            <h2 className="text-3xl font-black mb-6">{employees.find(e => e.id === selectedEmpId)?.name} 的詳細紀錄</h2>
+                            <div className="space-y-4">
+                                {records.filter(r => r.empId === selectedEmpId).map(r => (
+                                    <div key={r.id} className="p-4 bg-slate-50 rounded-xl flex justify-between">
+                                        <div>
+                                            <p className="font-bold">{r.category} <small className="font-normal text-slate-400">{r.timestamp}</small></p>
+                                            <p>{r.content}</p>
+                                        </div>
+                                        <button onClick={() => deleteRecord(r.id)} className="text-red-400"><i data-lucide="trash-2" size="18"></i></button>
+                                    </div>
+                                ))}
+                            </div>
+                        </div>
+                    ) : (
+                        <div className="space-y-8">
+                            <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+                                <div className="bg-white p-6 rounded-2xl shadow-sm border-l-4 border-blue-500"><p className="text-slate-500 text-sm">員工總數</p><p className="text-2xl font-black">{employees.length}</p></div>
+                                <div className="bg-white p-6 rounded-2xl shadow-sm border-l-4 border-green-500"><p className="text-slate-500 text-sm">優良總計</p><p className="text-2xl font-black text-green-600">{stats.totalGood}</p></div>
+                                <div className="bg-white p-6 rounded-2xl shadow-sm border-l-4 border-red-500"><p className="text-slate-500 text-sm">欠佳總計</p><p className="text-2xl font-black text-red-600">{stats.totalBad}</p></div>
+                                <div className="bg-white p-6 rounded-2xl shadow-sm border-l-4 border-amber-500"><p className="text-slate-500 text-sm">雲端紀錄</p><p className="text-2xl font-black">{records.length}</p></div>
+                            </div>
+                            <div className="grid md:grid-cols-2 gap-8">
+                                <div className="bg-white p-6 rounded-2xl shadow-sm">
+                                    <h3 className="font-bold mb-4 text-green-700">優異前十</h3>
+                                    {stats.top10.map(s => <div key={s.id} onClick={() => setSelectedEmpId(s.id)} className="flex justify-between p-2 hover:bg-slate-50 rounded cursor-pointer"><span>{s.name}</span><span className="text-green-600">+{s.good}</span></div>)}
+                                </div>
+                                <div className="bg-white p-6 rounded-2xl shadow-sm">
+                                    <h3 className="font-bold mb-4 text-red-700">需加強前十</h3>
+                                    {stats.bottom10.map(s => <div key={s.id} onClick={() => setSelectedEmpId(s.id)} className="flex justify-between p-2 hover:bg-slate-50 rounded cursor-pointer"><span>{s.name}</span><span className="text-red-600">-{s.bad}</span></div>)}
+                                </div>
+                            </div>
+                            <div className="bg-white p-8 rounded-2xl shadow-sm border">
+                                <h3 className="text-xl font-bold mb-6">員工管理</h3>
+                                <div className="grid md:grid-cols-2 gap-8">
+                                    <div>
+                                        <p className="text-sm font-bold text-slate-500 mb-2">批量匯入 (姓名 部門)</p>
+                                        <textarea className="w-full border p-4 bg-slate-50 rounded-xl h-32" value={bulkInput} onChange={e => setBulkInput(e.target.value)} />
+                                        <button onClick={handleBulkAdd} className="mt-2 bg-slate-800 text-white px-6 py-2 rounded-xl">匯入雲端</button>
+                                    </div>
+                                    <div className="max-h-64 overflow-y-auto custom-scrollbar">
+                                        {employees.map(e => (
+                                            <div key={e.id} className="flex justify-between p-3 border-b">
+                                                <span>{e.name} <small className="text-slate-400">{e.dept}</small></span>
+                                                <div className="flex gap-2">
+                                                    <button onClick={() => setSelectedEmpId(e.id)} className="text-blue-500"><i data-lucide="file-text" size="16"></i></button>
+                                                    <button onClick={() => toggleStatus(e.id, e.status)} className="text-xs font-bold">{e.status === 'active' ? '離職' : '恢復'}</button>
+                                                </div>
+                                            </div>
+                                        ))}
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    )}
+                </div>
+            );
+        }
+
+        const root = ReactDOM.createRoot(document.getElementById('root'));
+        root.render(<App />);
+    </script>
+</body>
+</html>
