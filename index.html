@@ -31,15 +31,14 @@
     <script type="text/babel">
         const { useState, useMemo, useEffect } = React;
 
-        // --- 請在此處填入您的 Firebase 配置 ---
-        // 您可以從 Firebase Console > 專案設定 > 您的應用程式 中取得
+        // --- 已更新為您的 Firebase 配置 ---
         const firebaseConfig = {
-            apiKey: "", 
-            authDomain: "",
-            projectId: "",
-            storageBucket: "",
-            messagingSenderId: "",
-            appId: ""
+            apiKey: "AIzaSyC8WfhsIyHoykp0j1VE43rsakZ4Tzj9d7o",
+            authDomain: "performance-e8a29.firebaseapp.com",
+            projectId: "performance-e8a29",
+            storageBucket: "performance-e8a29.firebasestorage.app",
+            messagingSenderId: "240182291787",
+            appId: "1:240182291787:web:9ab1eaf690b754475a4cce"
         };
 
         // 初始化 Firebase (Compat 版本)
@@ -48,22 +47,8 @@
         }
         const auth = firebase.auth();
         const db = firebase.firestore();
+        // appId 作為 Firestore 中的集合層級路徑
         const appId = "performance-tracking-prod";
-
-        // 圖示組件封裝
-        const Icon = ({ name, size = 24, className = "" }) => {
-            const [iconHtml, setIconHtml] = useState("");
-            useEffect(() => {
-                if (window.lucide) {
-                    const icon = window.lucide.icons[name];
-                    if (icon) {
-                        // 簡單模擬 lucide-react 的行為
-                    }
-                }
-            }, [name]);
-            // 直接使用 SVG 或是透過 Lucide 渲染
-            return <i data-lucide={name} className={className} style={{width: size, height: size}}></i>;
-        };
 
         // 部門清單
         const departments = ["出貨部", "物流部", "管理部", "商務拓展部", "客服部", "銷售部", "行銷部", "包裝部", "生產部", "研發部"];
@@ -103,14 +88,14 @@
                         setEmployees(empList);
                         setIsLoading(false);
                         setTimeout(() => lucide.createIcons(), 100);
-                    });
+                    }, (err) => console.error("Snapshot error:", err));
 
                 const unsubRec = db.collection('artifacts').doc(appId).collection('public').doc('data').collection('records')
                     .onSnapshot((snapshot) => {
                         const recList = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
                         setRecords(recList.sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp)));
                         setTimeout(() => lucide.createIcons(), 100);
-                    });
+                    }, (err) => console.error("Snapshot error:", err));
 
                 return () => { unsubEmp(); unsubRec(); };
             }, [user]);
@@ -133,7 +118,7 @@
                     await db.collection('artifacts').doc(appId).collection('public').doc('data').collection('records').add(newRecord);
                     setForm({ ...form, content: '', empId: '' });
                     notify('紀錄已同步至雲端');
-                } catch (err) { notify('儲存失敗'); }
+                } catch (err) { notify('儲存失敗，請檢查 Firestore 規則'); }
             };
 
             const [bulkInput, setBulkInput] = useState('');
@@ -228,13 +213,13 @@
                             </div>
                             <div className="md:col-span-2 space-y-4">
                                 <h2 className="text-lg font-bold">即時動態</h2>
-                                {records.map(r => (
+                                {records.length === 0 ? <p className="text-slate-400">目前尚無雲端紀錄</p> : records.map(r => (
                                     <div key={r.id} className="bg-white p-5 rounded-2xl shadow-sm border border-slate-100 flex gap-4">
                                         <div className={`p-2 rounded-full h-fit ${r.type === 'good' ? 'bg-green-100 text-green-600' : 'bg-red-100 text-red-600'}`}>
                                             <i data-lucide={r.type === 'good' ? "trending-up" : "trending-down"}></i>
                                         </div>
                                         <div className="flex-1">
-                                            <div className="flex justify-between font-bold"><span>{r.empName} <small className="text-slate-400">[{r.dept}]</small></span><small className="font-normal text-slate-400">{new Date(r.timestamp).toLocaleTimeString()}</small></div>
+                                            <div className="flex justify-between font-bold"><span>{r.empName} <small className="text-slate-400">[{r.dept}]</small></span><small className="font-normal text-slate-400">{new Date(r.timestamp).toLocaleString()}</small></div>
                                             <div className="text-xs bg-slate-100 inline-block px-2 py-1 rounded my-1 text-slate-500">{r.category}</div>
                                             <p className="text-slate-600">{r.content}</p>
                                         </div>
@@ -250,7 +235,7 @@
                                 {records.filter(r => r.empId === selectedEmpId).map(r => (
                                     <div key={r.id} className="p-4 bg-slate-50 rounded-xl flex justify-between">
                                         <div>
-                                            <p className="font-bold">{r.category} <small className="font-normal text-slate-400">{r.timestamp}</small></p>
+                                            <p className="font-bold">{r.category} <small className="font-normal text-slate-400">{new Date(r.timestamp).toLocaleString()}</small></p>
                                             <p>{r.content}</p>
                                         </div>
                                         <button onClick={() => deleteRecord(r.id)} className="text-red-400"><i data-lucide="trash-2" size="18"></i></button>
@@ -281,7 +266,7 @@
                                 <div className="grid md:grid-cols-2 gap-8">
                                     <div>
                                         <p className="text-sm font-bold text-slate-500 mb-2">批量匯入 (姓名 部門)</p>
-                                        <textarea className="w-full border p-4 bg-slate-50 rounded-xl h-32" value={bulkInput} onChange={e => setBulkInput(e.target.value)} />
+                                        <textarea className="w-full border p-4 bg-slate-50 rounded-xl h-32" value={bulkInput} onChange={e => setBulkInput(e.target.value)} placeholder="例：王小明 出貨部" />
                                         <button onClick={handleBulkAdd} className="mt-2 bg-slate-800 text-white px-6 py-2 rounded-xl">匯入雲端</button>
                                     </div>
                                     <div className="max-h-64 overflow-y-auto custom-scrollbar">
