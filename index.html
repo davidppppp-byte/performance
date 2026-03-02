@@ -4,7 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>年度考核依據系統</title>
-    <!-- 載入 React 與 Babel (用於瀏覽器端解析 JSX) -->
+    <!-- 載入 React 與 Babel -->
     <script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
     <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
     <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
@@ -16,6 +16,8 @@
     <script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-app-compat.js"></script>
     <script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-auth-compat.js"></script>
     <script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-firestore-compat.js"></script>
+    <!-- 載入 Excel 匯出函式庫 (SheetJS) -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
     <style>
         @import url('https://fonts.googleapis.com/css2?family=Noto+Sans+TC:wght@400;500;700;900&display=swap');
         body { font-family: 'Noto Sans TC', sans-serif; }
@@ -31,7 +33,7 @@
     <script type="text/babel">
         const { useState, useMemo, useEffect } = React;
 
-        // --- 已更新為您的 Firebase 配置 ---
+        // --- Firebase 配置 ---
         const firebaseConfig = {
             apiKey: "AIzaSyC8WfhsIyHoykp0j1VE43rsakZ4Tzj9d7o",
             authDomain: "performance-e8a29.firebaseapp.com",
@@ -41,16 +43,13 @@
             appId: "1:240182291787:web:9ab1eaf690b754475a4cce"
         };
 
-        // 初始化 Firebase (Compat 版本)
         if (!firebase.apps.length) {
             firebase.initializeApp(firebaseConfig);
         }
         const auth = firebase.auth();
         const db = firebase.firestore();
-        // appId 作為 Firestore 中的集合層級路徑
         const appId = "performance-tracking-prod";
 
-        // 部門清單
         const departments = ["出貨部", "物流部", "管理部", "商務拓展部", "客服部", "銷售部", "行銷部", "包裝部", "生產部", "研發部"];
         const categories = ["工作品質與專業度", "效率與交付速度", "團隊協作與溝通", "責任感與主動性", "創新與問題解決", "學習與成長"];
 
@@ -63,6 +62,7 @@
             const [selectedEmpId, setSelectedEmpId] = useState(null);
             const [isLoading, setIsLoading] = useState(true);
             const [errorMsg, setErrorMsg] = useState("");
+            const [adminSearchTerm, setAdminSearchTerm] = useState("");
 
             const notify = (msg) => {
                 setShowNotification(msg);
@@ -75,8 +75,7 @@
                         setUser(u);
                     } else {
                         auth.signInAnonymously().catch(e => {
-                            console.error("Auth Error", e);
-                            setErrorMsg("認證失敗，請檢查 Firebase Auth 設定");
+                            setErrorMsg("認證失敗");
                             setIsLoading(false);
                         });
                     }
@@ -94,8 +93,7 @@
                         setIsLoading(false);
                         setTimeout(() => lucide.createIcons(), 100);
                     }, (err) => {
-                        console.error("Snapshot error:", err);
-                        setErrorMsg("資料庫讀取拒絕：請檢查 Firestore 規則 (Rules)");
+                        setErrorMsg("資料庫讀取拒絕");
                         setIsLoading(false);
                     });
 
@@ -105,7 +103,6 @@
                         setRecords(recList.sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp)));
                         setTimeout(() => lucide.createIcons(), 100);
                     }, (err) => {
-                        console.error("Snapshot error:", err);
                         setIsLoading(false);
                     });
 
@@ -114,7 +111,7 @@
 
             useEffect(() => {
                 if (!isLoading) lucide.createIcons();
-            }, [view, selectedEmpId, isLoading]);
+            }, [view, selectedEmpId, isLoading, adminSearchTerm]);
 
             const [form, setForm] = useState({ dept: '', empId: '', type: 'good', category: categories[0], content: '' });
 
@@ -130,10 +127,7 @@
                     await db.collection('artifacts').doc(appId).collection('public').doc('data').collection('records').add(newRecord);
                     setForm({ ...form, content: '', empId: '' });
                     notify('紀錄已同步至雲端');
-                } catch (err) { 
-                    notify('儲存失敗，請檢查 Firestore 規則'); 
-                    console.error(err);
-                }
+                } catch (err) { notify('儲存失敗'); }
             };
 
             const [bulkInput, setBulkInput] = useState('');
@@ -164,7 +158,7 @@
 
             const stats = useMemo(() => {
                 const counts = {};
-                employees.forEach(e => counts[e.id] = { id: e.id, name: e.name, dept: e.dept, good: 0, bad: 0, score: 0 });
+                employees.forEach(e => counts[e.id] = { id: e.id, name: e.name, dept: e.dept, good: 0, bad: 0, score: 0, status: e.status });
                 records.forEach(r => {
                     if (counts[r.empId]) {
                         if (r.type === 'good') { counts[r.empId].good += 1; counts[r.empId].score += 1; }
@@ -177,20 +171,71 @@
                     bottom10: [...sorted].reverse().filter(s => s.good > 0 || s.bad > 0).slice(0, 10),
                     totalGood: records.filter(r => r.type === 'good').length,
                     totalBad: records.filter(r => r.type === 'bad').length,
-                    allStats: counts
+                    allStats: counts,
+                    sortedList: sorted
                 };
             }, [records, employees]);
+
+            // Excel 匯出邏輯
+            const handleExportExcel = () => {
+                if (employees.length === 0) {
+                    notify("目前沒有資料可供匯出");
+                    return;
+                }
+
+                // 1. 準備績效總表數據
+                const summaryData = stats.sortedList.map(s => ({
+                    "姓名": s.name,
+                    "部門": s.dept,
+                    "優良次數": s.good,
+                    "欠佳次數": s.bad,
+                    "總績效積分": s.score,
+                    "狀態": s.status === 'active' ? '在職' : '離職'
+                }));
+
+                // 2. 準備詳細紀錄數據
+                const detailData = records.map(r => ({
+                    "時間": new Date(r.timestamp).toLocaleString(),
+                    "同仁姓名": r.empName,
+                    "所屬部門": r.dept,
+                    "表現類型": r.type === 'good' ? '優良' : '欠佳',
+                    "評核類別": r.category,
+                    "說明內容": r.content
+                }));
+
+                // 建立活頁簿
+                const wb = XLSX.utils.book_new();
+                
+                // 建立分頁
+                const wsSummary = XLSX.utils.json_to_sheet(summaryData);
+                const wsDetail = XLSX.utils.json_to_sheet(detailData);
+
+                // 將分頁加入活頁簿
+                XLSX.utils.book_append_sheet(wb, wsSummary, "績效總表");
+                XLSX.utils.book_append_sheet(wb, wsDetail, "詳細紀錄清單");
+
+                // 下載檔案
+                const fileName = `年度考核紀錄匯出_${new Date().toISOString().split('T')[0]}.xlsx`;
+                XLSX.writeFile(wb, fileName);
+                notify("Excel 報表匯出成功！");
+            };
+
+            const filteredAdminEmployees = useMemo(() => {
+                return employees.filter(e => 
+                    e.name.toLowerCase().includes(adminSearchTerm.toLowerCase()) || 
+                    e.dept.toLowerCase().includes(adminSearchTerm.toLowerCase())
+                );
+            }, [employees, adminSearchTerm]);
 
             if (isLoading) return (
                 <div className="min-h-screen flex flex-col items-center justify-center bg-slate-50">
                     <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-blue-600 mb-4"></div>
-                    <div className="font-bold text-slate-400">系統載入中...</div>
+                    <div className="font-bold text-slate-400 font-sans">系統連線中...</div>
                 </div>
             );
 
             return (
                 <div className="min-h-screen p-4 md:p-8 max-w-6xl mx-auto">
-                    {/* 錯誤提示 */}
                     {errorMsg && (
                         <div className="mb-6 p-4 bg-red-100 border-l-4 border-red-500 text-red-700 flex justify-between items-center">
                             <span><strong>連線錯誤：</strong>{errorMsg}</span>
@@ -220,23 +265,23 @@
                             <div className="bg-white p-6 rounded-2xl shadow-sm border border-slate-100">
                                 <h2 className="text-lg font-bold mb-6 flex items-center gap-2"><i data-lucide="plus-circle" className="text-blue-500"></i>記錄表現</h2>
                                 <form onSubmit={handleSubmitRecord} className="space-y-4">
-                                    <select className="w-full border p-3 rounded-xl bg-slate-50 outline-none focus:ring-2 focus:ring-blue-500" value={form.dept} onChange={e => setForm({...form, dept: e.target.value, empId: ''})}>
+                                    <select className="w-full border p-3 rounded-xl bg-slate-50 outline-none" value={form.dept} onChange={e => setForm({...form, dept: e.target.value, empId: ''})}>
                                         <option value="">-- 選擇部門 --</option>
                                         {departments.map(d => <option key={d} value={d}>{d}</option>)}
                                     </select>
-                                    <select className="w-full border p-3 rounded-xl bg-slate-50 outline-none focus:ring-2 focus:ring-blue-500" value={form.empId} onChange={e => setForm({...form, empId: e.target.value})} disabled={!form.dept}>
+                                    <select className="w-full border p-3 rounded-xl bg-slate-50 outline-none" value={form.empId} onChange={e => setForm({...form, empId: e.target.value})} disabled={!form.dept}>
                                         <option value="">-- 選擇同仁 --</option>
                                         {employees.filter(e => e.dept === form.dept && e.status === 'active').map(e => <option key={e.id} value={e.id}>{e.name}</option>)}
                                     </select>
                                     <div className="flex gap-2">
-                                        <button type="button" onClick={() => setForm({...form, type:'good'})} className={`flex-1 py-3 rounded-xl border transition-all ${form.type === 'good' ? 'bg-green-50 border-green-200 text-green-700 font-bold' : 'bg-white text-slate-400'}`}>優良</button>
-                                        <button type="button" onClick={() => setForm({...form, type:'bad'})} className={`flex-1 py-3 rounded-xl border transition-all ${form.type === 'bad' ? 'bg-red-50 border-red-200 text-red-700 font-bold' : 'bg-white text-slate-400'}`}>欠佳</button>
+                                        <button type="button" onClick={() => setForm({...form, type:'good'})} className={`flex-1 py-3 rounded-xl border ${form.type === 'good' ? 'bg-green-50 border-green-200 text-green-700 font-bold' : 'bg-white text-slate-400'}`}>優良</button>
+                                        <button type="button" onClick={() => setForm({...form, type:'bad'})} className={`flex-1 py-3 rounded-xl border ${form.type === 'bad' ? 'bg-red-50 border-red-200 text-red-700 font-bold' : 'bg-white text-slate-400'}`}>欠佳</button>
                                     </div>
-                                    <select className="w-full border p-3 rounded-xl bg-slate-50 outline-none focus:ring-2 focus:ring-blue-500" value={form.category} onChange={e => setForm({...form, category: e.target.value})}>
+                                    <select className="w-full border p-3 rounded-xl bg-slate-50" value={form.category} onChange={e => setForm({...form, category: e.target.value})}>
                                         {categories.map(c => <option key={c} value={c}>{c}</option>)}
                                     </select>
-                                    <textarea className="w-full border p-3 rounded-xl bg-slate-50 min-h-[120px] outline-none focus:ring-2 focus:ring-blue-500" placeholder="描述表現細節..." value={form.content} onChange={e => setForm({...form, content: e.target.value})} />
-                                    <button className="w-full bg-blue-600 hover:bg-blue-700 text-white font-bold py-4 rounded-xl shadow-md transition-all active:scale-[0.98]">提交紀錄</button>
+                                    <textarea className="w-full border p-3 rounded-xl bg-slate-50 min-h-[120px]" placeholder="描述表現細節..." value={form.content} onChange={e => setForm({...form, content: e.target.value})} />
+                                    <button className="w-full bg-blue-600 text-white font-bold py-4 rounded-xl shadow-md active:scale-95 transition-all">提交紀錄</button>
                                 </form>
                             </div>
                             <div className="md:col-span-2 space-y-4">
@@ -247,33 +292,24 @@
                                             <i data-lucide={r.type === 'good' ? "trending-up" : "trending-down"}></i>
                                         </div>
                                         <div className="flex-1">
-                                            <div className="flex justify-between font-bold text-slate-800">
-                                                <span>{r.empName} <small className="text-slate-400 ml-1 font-normal">[{r.dept}]</small></span>
-                                                <small className="font-normal text-slate-400">{new Date(r.timestamp).toLocaleString()}</small>
+                                            <div className="flex justify-between font-bold text-slate-800 text-sm md:text-base">
+                                                <span>{r.empName} <small className="text-slate-400">[{r.dept}]</small></span>
+                                                <small className="font-normal text-slate-400 text-xs">{new Date(r.timestamp).toLocaleString()}</small>
                                             </div>
                                             <div className="text-xs bg-slate-100 inline-block px-2 py-1 rounded my-1 text-slate-500 font-medium">{r.category}</div>
-                                            <p className="text-slate-600 leading-relaxed">{r.content}</p>
+                                            <p className="text-slate-600 text-sm">{r.content}</p>
                                         </div>
                                     </div>
                                 ))}
                             </div>
                         </div>
                     ) : selectedEmpId ? (
-                        <div className="bg-white p-8 rounded-3xl shadow-sm border border-slate-100 animate-in fade-in slide-in-from-bottom-4">
+                        <div className="bg-white p-8 rounded-3xl shadow-sm border border-slate-100 animate-in fade-in">
                             <button onClick={() => setSelectedEmpId(null)} className="mb-6 text-slate-500 hover:text-blue-600 font-bold flex items-center gap-2 transition-colors"><i data-lucide="arrow-left" size="20"></i>返回後台總覽</button>
-                            <div className="flex justify-between items-end border-b pb-6 mb-6">
-                                <div>
-                                    <h2 className="text-3xl font-black text-slate-800 mb-1">{employees.find(e => e.id === selectedEmpId)?.name}</h2>
-                                    <p className="text-slate-400">{employees.find(e => e.id === selectedEmpId)?.dept}</p>
-                                </div>
-                                <div className="flex gap-4">
-                                    <div className="text-center px-4 py-2 bg-green-50 rounded-xl"><p className="text-[10px] text-green-600 font-bold">優良</p><p className="text-xl font-bold text-green-700">{records.filter(r => r.empId === selectedEmpId && r.type === 'good').length}</p></div>
-                                    <div className="text-center px-4 py-2 bg-red-50 rounded-xl"><p className="text-[10px] text-red-600 font-bold">欠佳</p><p className="text-xl font-bold text-red-700">{records.filter(r => r.empId === selectedEmpId && r.type === 'bad').length}</p></div>
-                                </div>
-                            </div>
+                            <h2 className="text-3xl font-black mb-6 border-b pb-4">{employees.find(e => e.id === selectedEmpId)?.name} 的詳細紀錄</h2>
                             <div className="space-y-4">
                                 {records.filter(r => r.empId === selectedEmpId).map(r => (
-                                    <div key={r.id} className="p-5 bg-slate-50 border border-slate-100 rounded-2xl flex justify-between group hover:bg-white hover:shadow-md transition-all">
+                                    <div key={r.id} className="p-5 bg-slate-50 rounded-2xl flex justify-between group hover:bg-white hover:shadow-md transition-all border border-transparent">
                                         <div className="flex gap-4">
                                             <div className={`p-2 rounded-xl h-fit ${r.type === 'good' ? 'bg-green-100 text-green-600' : 'bg-red-100 text-red-600'}`}>
                                                 <i data-lucide={r.type === 'good' ? "trending-up" : "trending-down"} size="18"></i>
@@ -283,27 +319,42 @@
                                                 <p className="text-slate-600 mt-1">{r.content}</p>
                                             </div>
                                         </div>
-                                        <button onClick={() => deleteRecord(r.id)} className="opacity-0 group-hover:opacity-100 text-slate-300 hover:text-red-500 transition-all p-2"><i data-lucide="trash-2" size="20"></i></button>
+                                        <button onClick={() => deleteRecord(r.id)} className="opacity-0 group-hover:opacity-100 text-slate-300 hover:text-red-500 p-2"><i data-lucide="trash-2" size="20"></i></button>
                                     </div>
                                 ))}
-                                {records.filter(r => r.empId === selectedEmpId).length === 0 && <p className="text-center py-10 text-slate-400">目前尚無此同仁的紀錄</p>}
+                                {records.filter(r => r.empId === selectedEmpId).length === 0 && <p className="text-center py-10 text-slate-400">目前尚無紀錄</p>}
                             </div>
                         </div>
                     ) : (
                         <div className="space-y-8 animate-in fade-in">
-                            <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-                                <div className="bg-white p-6 rounded-2xl shadow-sm border-l-4 border-blue-500 border border-slate-100"><p className="text-slate-500 text-xs font-bold uppercase tracking-wider mb-1">員工總數</p><p className="text-2xl font-black">{employees.length}</p></div>
-                                <div className="bg-white p-6 rounded-2xl shadow-sm border-l-4 border-green-500 border border-slate-100"><p className="text-slate-500 text-xs font-bold uppercase tracking-wider mb-1">優良總計</p><p className="text-2xl font-black text-green-600">{stats.totalGood}</p></div>
-                                <div className="bg-white p-6 rounded-2xl shadow-sm border-l-4 border-red-500 border border-slate-100"><p className="text-slate-500 text-xs font-bold uppercase tracking-wider mb-1">欠佳總計</p><p className="text-2xl font-black text-red-700">{stats.totalBad}</p></div>
-                                <div className="bg-white p-6 rounded-2xl shadow-sm border-l-4 border-amber-500 border border-slate-100"><p className="text-slate-500 text-xs font-bold uppercase tracking-wider mb-1">雲端總筆數</p><p className="text-2xl font-black">{records.length}</p></div>
+                            {/* 看板區塊加入匯出按鈕 */}
+                            <div className="flex flex-col md:flex-row justify-between items-start md:items-end gap-4 mb-2">
+                                <div>
+                                    <h2 className="text-2xl font-black text-slate-800">數據分析概覽</h2>
+                                    <p className="text-slate-400 text-sm">即時同步雲端資料庫之評核數據</p>
+                                </div>
+                                <button 
+                                    onClick={handleExportExcel}
+                                    className="flex items-center gap-2 bg-green-600 hover:bg-green-700 text-white px-6 py-3 rounded-xl font-bold shadow-lg shadow-green-100 transition-all active:scale-95"
+                                >
+                                    <i data-lucide="download" size="18"></i> 匯出 Excel 報表
+                                </button>
                             </div>
+
+                            <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+                                <div className="bg-white p-6 rounded-2xl shadow-sm border-l-4 border-blue-500 border border-slate-100"><p className="text-slate-500 text-xs font-bold mb-1">員工總數</p><p className="text-2xl font-black">{employees.length}</p></div>
+                                <div className="bg-white p-6 rounded-2xl shadow-sm border-l-4 border-green-500 border border-slate-100"><p className="text-slate-500 text-xs font-bold mb-1">優良總計</p><p className="text-2xl font-black text-green-600">{stats.totalGood}</p></div>
+                                <div className="bg-white p-6 rounded-2xl shadow-sm border-l-4 border-red-500 border border-slate-100"><p className="text-slate-500 text-xs font-bold mb-1">欠佳總計</p><p className="text-2xl font-black text-red-700">{stats.totalBad}</p></div>
+                                <div className="bg-white p-6 rounded-2xl shadow-sm border-l-4 border-amber-500 border border-slate-100"><p className="text-slate-500 text-xs font-bold mb-1">總評核筆數</p><p className="text-2xl font-black">{records.length}</p></div>
+                            </div>
+                            
                             <div className="grid md:grid-cols-2 gap-8">
                                 <div className="bg-white p-6 rounded-2xl shadow-sm border border-slate-100">
                                     <h3 className="font-bold mb-4 text-green-700 flex items-center gap-2"><i data-lucide="trending-up" size="18"></i> 表現優異前十</h3>
                                     <div className="space-y-1">
                                         {stats.top10.map((s, i) => (
                                             <div key={s.id} onClick={() => setSelectedEmpId(s.id)} className="flex justify-between items-center p-3 hover:bg-green-50 rounded-xl cursor-pointer transition-colors group">
-                                                <span className="text-slate-700 font-medium"><span className="text-slate-300 mr-2">#{i+1}</span>{s.name} <small className="text-slate-400">({s.dept})</small></span>
+                                                <span className="text-slate-700 font-medium flex items-center"><span className="text-slate-300 mr-2 w-6 font-bold italic">#{i+1}</span>{s.name} <small className="text-slate-400 ml-1">({s.dept})</small></span>
                                                 <span className="text-green-600 font-bold bg-green-100 px-2 py-0.5 rounded-lg text-sm">+{s.good}</span>
                                             </div>
                                         ))}
@@ -314,33 +365,50 @@
                                     <div className="space-y-1">
                                         {stats.bottom10.map((s, i) => (
                                             <div key={s.id} onClick={() => setSelectedEmpId(s.id)} className="flex justify-between items-center p-3 hover:bg-red-50 rounded-xl cursor-pointer transition-colors group">
-                                                <span className="text-slate-700 font-medium"><span className="text-slate-300 mr-2">#{i+1}</span>{s.name} <small className="text-slate-400">({s.dept})</small></span>
+                                                <span className="text-slate-700 font-medium flex items-center"><span className="text-slate-300 mr-2 w-6 font-bold italic">#{i+1}</span>{s.name} <small className="text-slate-400 ml-1">({s.dept})</small></span>
                                                 <span className="text-red-600 font-bold bg-red-100 px-2 py-0.5 rounded-lg text-sm">-{s.bad}</span>
                                             </div>
                                         ))}
                                     </div>
                                 </div>
                             </div>
+
                             <div className="bg-white p-8 rounded-2xl shadow-sm border border-slate-100">
-                                <h3 className="text-xl font-bold mb-6 flex items-center gap-2"><i data-lucide="users" className="text-blue-500"></i> 員工資料維護與管理</h3>
+                                <h3 className="text-xl font-bold mb-6 flex items-center gap-2"><i data-lucide="users" className="text-blue-500"></i> 同仁列表與管理搜尋</h3>
                                 <div className="grid md:grid-cols-2 gap-8">
                                     <div>
-                                        <p className="text-sm font-bold text-slate-500 mb-2">快速批量匯入 (格式：姓名 部門)</p>
-                                        <textarea className="w-full border p-4 bg-slate-50 rounded-xl h-32 outline-none focus:ring-2 focus:ring-slate-800" value={bulkInput} onChange={e => setBulkInput(e.target.value)} placeholder="例：王小明 出貨部&#10;李大同 研發部" />
-                                        <button onClick={handleBulkAdd} className="mt-4 bg-slate-800 hover:bg-black text-white px-8 py-3 rounded-xl font-bold transition-all shadow-md active:scale-95">匯入到雲端資料庫</button>
+                                        <p className="text-sm font-bold text-slate-500 mb-2">快速批量匯入 (姓名 部門)</p>
+                                        <textarea className="w-full border p-4 bg-slate-50 rounded-xl h-32 outline-none focus:ring-2 focus:ring-slate-800 text-sm" value={bulkInput} onChange={e => setBulkInput(e.target.value)} placeholder="例：王小明 出貨部&#10;李大同 研發部" />
+                                        <button onClick={handleBulkAdd} className="mt-4 bg-slate-800 hover:bg-black text-white px-8 py-3 rounded-xl font-bold transition-all shadow-md active:scale-95">匯入員工資料</button>
                                     </div>
-                                    <div className="max-h-80 overflow-y-auto custom-scrollbar space-y-2 pr-2">
-                                        {employees.map(e => (
-                                            <div key={e.id} className="flex justify-between items-center p-3 bg-slate-50 rounded-xl border border-slate-100">
-                                                <span><span className={`font-bold ${e.status === 'inactive' ? 'line-through text-slate-400' : 'text-slate-700'}`}>{e.name}</span> <small className="text-slate-400">[{e.dept}]</small></span>
-                                                <div className="flex gap-2">
-                                                    <button onClick={() => setSelectedEmpId(e.id)} className="p-2 bg-blue-50 text-blue-600 rounded-lg hover:bg-blue-100 transition-colors" title="查看紀錄"><i data-lucide="file-text" size="16"></i></button>
-                                                    <button onClick={() => toggleStatus(e.id, e.status)} className={`px-3 py-1 rounded-lg text-xs font-bold transition-all ${e.status === 'active' ? 'bg-slate-200 text-slate-500 hover:bg-red-50 hover:text-red-500' : 'bg-green-50 text-green-600 hover:bg-green-100'}`}>
-                                                        {e.status === 'active' ? '標記離職' : '恢復'}
-                                                    </button>
-                                                </div>
-                                            </div>
-                                        ))}
+                                    <div className="space-y-4">
+                                        <div className="relative">
+                                            <i data-lucide="search" className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" size="18"></i>
+                                            <input 
+                                                type="text" 
+                                                placeholder="搜尋同仁姓名或部門..." 
+                                                className="w-full pl-10 pr-4 py-2 bg-slate-100 border-none rounded-xl focus:ring-2 focus:ring-blue-500 outline-none text-sm"
+                                                value={adminSearchTerm}
+                                                onChange={(e) => setAdminSearchTerm(e.target.value)}
+                                            />
+                                        </div>
+                                        <div className="max-h-80 overflow-y-auto custom-scrollbar space-y-2 pr-2">
+                                            {filteredAdminEmployees.length === 0 ? (
+                                                <p className="text-center py-10 text-slate-400 text-sm italic">找不到符合的同仁</p>
+                                            ) : (
+                                                filteredAdminEmployees.map(e => (
+                                                    <div key={e.id} className="flex justify-between items-center p-3 bg-slate-50 rounded-xl border border-slate-100 hover:bg-white hover:border-blue-100 transition-all group">
+                                                        <span><span className={`font-bold ${e.status === 'inactive' ? 'line-through text-slate-400' : 'text-slate-700'}`}>{e.name}</span> <small className="text-slate-400">[{e.dept}]</small></span>
+                                                        <div className="flex gap-2">
+                                                            <button onClick={() => setSelectedEmpId(e.id)} className="p-2 bg-blue-50 text-blue-600 rounded-lg hover:bg-blue-600 hover:text-white transition-all" title="查看紀錄"><i data-lucide="file-text" size="16"></i></button>
+                                                            <button onClick={() => toggleStatus(e.id, e.status)} className={`px-3 py-1 rounded-lg text-[10px] font-bold uppercase transition-all ${e.status === 'active' ? 'bg-slate-200 text-slate-500 hover:bg-red-50 hover:text-red-500' : 'bg-green-50 text-green-600 hover:bg-green-100'}`}>
+                                                                {e.status === 'active' ? '標記離職' : '恢復'}
+                                                            </button>
+                                                        </div>
+                                                    </div>
+                                                ))
+                                            )}
+                                        </div>
                                     </div>
                                 </div>
                             </div>
